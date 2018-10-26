@@ -26,15 +26,15 @@ def placeholder_inputs(batch_size, n_points, gmm):
     return points_pl, labels_pl, w_pl, mu_pl, sigma_pl
 
 
-def get_model(points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40):
+def get_model(fv, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40, batch_size=64):
     """ Classification PointNet, input is BxNx3, output Bx40 """
-    batch_size = points.get_shape()[0].value
-    n_points = points.get_shape()[1].value
+    #batch_size = fv.shape()[0]
+    #n_points = points.get_shape()[1].value
     n_gaussians = w.shape[0].value
     res = int(np.round(np.power(n_gaussians,1.0/3.0)))
 
 
-    fv = tf_util.get_3dmfv(points, w, mu, sigma, flatten=False)
+    #fv = tf_util.get_3dmfv(points, w, mu, sigma, flatten=False)
 
     if add_noise:
         noise = tf.cond(is_training,
@@ -81,7 +81,7 @@ def get_model(points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.0
                           scope='dp3')
     net = tf_util.fully_connected(net, num_classes, activation_fn=None, scope='fc4', is_training=is_training, weigth_decay=weigth_decay)
 
-    return net, fv
+    return net
 
 def inception_module(input, n_filters=64, kernel_sizes=[3,5], is_training=None, bn_decay=None, scope='inception'):
     one_by_one =  tf_util.conv3d(input, n_filters, [1,1,1], scope= scope + '_conv1',

@@ -990,4 +990,105 @@ def get_session(gpu_idx, limit_gpu=True):
     sess = tf.Session(config=config)
     return sess
 
+#--------------------Additional function for 3dmfv_per_batch -------------------------------------------------------#
+# TODO
+def get_3dmfv_per_batch(points_list, w, mu, sigma, flatten=True):
+    '''
+    Create a list of 3dfmv features given list of different or same number of points
+    '''
+    n_batches = 1
+    fv_list = []
+    n_gaussians = mu.shape[0]
+    D = mu.shape[1]
+    for points in points_list:
+        n_points = points.shape[0]
+        #Expand dimension for batch compatibility
+        #n_points X n_gaussians X D
+        batch_sig = np.tile(np.expand_dims(sigma,0),[n_points, 1, 1])  
 
+        #n_batches X n_points X n_gaussians X D
+        batch_sig = np.tile(np.expand_dims(batch_sig, 0), [n_batches, 1, 1,1]) 
+
+        #n_points X n_gaussians X D
+        batch_mu = np.tile(np.expand_dims(mu, 0),[n_points, 1, 1]) 
+
+        #n_batches X n_points X n_gaussians X D
+        batch_mu = np.tile(np.expand_dims(batch_mu, 0), [n_batches, 1, 1, 1]) 
+
+        #n_batches X n_points X n_guassians X D  - should check what happens when weights change
+        batch_w = np.tile(np.expand_dims(np.expand_dims(w, 0), 0), [n_batches, n_points, 1]) 
+
+        #n_batches X n_points X n_gaussians_D  # Generating the number of points for each gaussian for separate computation
+
+        batch_points = np.tile(np.expand_dims(points, -2), [1, 1, n_gaussians,1])
+
+        #Compute derivatives
+        w_per_batch_per_d = np.tile(np.expand_dims(np.expand_dims(w, 0), -1), [n_batches, 1, 3*D]) #n_batches X n_gaussians X 128*D (D for min and D for max)
+
+        #Define multivariate noraml distributions
+        #mvn = tf.contrib.distributions.MultivariateNormalDiag(loc=batch_mu, scale_diag=batch_sig)
+        #Compute probability per point
+        #p_per_point = mvn.prob(batch_points)
+        w_per_batch_per_d = np.tile(np.expand_dims(np.expand_dims(w, 0), -1),
+                                    [n_batches, 1, 3*D])  # n_batches X n_gaussians X D (D for min and D for max)
+
+        # Define multivariate noraml distributions
+        # Compute probability per point
+        p_per_point = (1.0 / (np.power(2.0 * np.pi, D / 2.0) * np.power(batch_sig[:, :, :, 0], D))) * np.exp(
+            -0.5 * np.sum(np.square((batch_points - batch_mu) / batch_sig), axis=3))
+
+        w_p = p_per_point
+        Q = w_p  # enforcing the assumption that the sum is 1
+        Q_per_d = np.tile(np.expand_dims(Q, -1), [1, 1, 1, D])
+
+        d_pi_all = np.expand_dims((Q - batch_w) / (np.sqrt(batch_w)), -1)
+        d_pi = np.concatenate([np.max(d_pi_all, axis=1), np.sum(d_pi_all, axis=1)], axis=2)
+
+        d_mu_all = Q_per_d * (batch_points - batch_mu) / batch_sig
+        d_mu = (1 / (np.sqrt(w_per_batch_per_d))) * np.concatenate([np.max(d_mu_all, axis=1), np.min(d_mu_all, axis=1), np.sum(d_mu_all, axis=1)], axis=2)
+
+        d_sig_all = Q_per_d * (np.square((batch_points - batch_mu) / batch_sig) - 1)
+        d_sigma = (1 / (np.sqrt(2 * w_per_batch_per_d))) * np.concatenate([np.max(d_sig_all, axis=1), np.min(d_sig_all, axis=1), np.sum(d_sig_all, axis=1)], axis=2)
+
+        # number of points  normaliation
+        d_pi = d_pi / n_points
+        d_mu = d_mu / n_points
+        d_sigma =d_sigma / n_points
+
+        normalize = True
+
+        if normalize:
+            # Power normaliation
+            alpha = 0.5
+            d_pi = np.sign(d_pi) * np.power(np.abs(d_pi), alpha)
+            d_mu = np.sign(d_mu) * np.power(np.abs(d_mu), alpha)
+            d_sigma = np.sign(d_sigma) * np.power(np.abs(d_sigma), alpha)
+
+            # L2 normaliation
+            d_pi = np.array([l2_normalize(d_pi[i, :, :], dim=0) for i in range (n_batches)])
+            d_mu = np.array([l2_normalize(d_mu[i, :,:], dim=0) for i in range (n_batches)])
+            d_sigma = np.array([l2_normalize(d_sigma[i, :, :], dim=0) for i in range (n_batches)])
+
+
+        fv = np.concatenate([d_pi, d_mu, d_sigma], axis=2)
+        fv = np.transpose(fv, axes=[0, 2, 1])
+
+        fv_list.extend(fv)
+    
+    # convert numpy list to tensor
+    fv_list = np.asarray(fv_list)
+    
+    #fv_pl = tf.convert_to_tensor(fv_list, dtype=tf.float32)
+    
+    return fv_list
+
+def l2_normalize(v, dim=1):
+    #normalize a vector along a dimension
+    #INPUT:
+    # v: a vector or matrix to normalize
+    # dim : the dimension along which to normalize
+    #OUTPUT: normalized v along dim
+    norm = np.linalg.norm(v, axis=dim)
+    if norm.all() == 0:
+        return v
+    return v / norm
