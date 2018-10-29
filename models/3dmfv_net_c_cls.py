@@ -83,10 +83,11 @@ def get_model(points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.0
 
     return net, fv
 
-def get_model_new(fv, points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40):
+def get_model_new(fv, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40, batch_size=64):
     """ Classification PointNet, input is BxNx3, output Bx40 """
-    batch_size = points.get_shape()[0].value
-    n_points = points.get_shape()[1].value
+    #batch_size = points.get_shape()[0].value
+    #n_points = points.get_shape()[1].value
+    
     n_gaussians = w.shape[0].value
     res = int(np.round(np.power(n_gaussians,1.0/3.0)))
 
