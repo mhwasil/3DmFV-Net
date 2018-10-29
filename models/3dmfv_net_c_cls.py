@@ -26,12 +26,13 @@ def placeholder_inputs(batch_size, n_points, gmm):
     return points_pl, labels_pl, w_pl, mu_pl, sigma_pl
 
 
-def get_model(fv_batch, points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40, batch_size=64):
+def get_model(points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40):
     """ Classification PointNet, input is BxNx3, output Bx40 """
-    #batch_size = fv.shape()[0]
+    batch_size = points.get_shape()[0].value
     n_points = points.get_shape()[1].value
     n_gaussians = w.shape[0].value
     res = int(np.round(np.power(n_gaussians,1.0/3.0)))
+
 
     fv = tf_util.get_3dmfv(points, w, mu, sigma, flatten=False)
 
@@ -80,7 +81,61 @@ def get_model(fv_batch, points, w, mu, sigma, is_training, bn_decay=None, weigth
                           scope='dp3')
     net = tf_util.fully_connected(net, num_classes, activation_fn=None, scope='fc4', is_training=is_training, weigth_decay=weigth_decay)
 
-    return net
+    return net, fv
+
+def get_model_new(fv, points, w, mu, sigma, is_training, bn_decay=None, weigth_decay=0.005, add_noise=False, num_classes=40):
+    """ Classification PointNet, input is BxNx3, output Bx40 """
+    batch_size = points.get_shape()[0].value
+    n_points = points.get_shape()[1].value
+    n_gaussians = w.shape[0].value
+    res = int(np.round(np.power(n_gaussians,1.0/3.0)))
+
+    #fv = tf_util.get_3dmfv(points, w, mu, sigma, flatten=False)
+
+    if add_noise:
+        noise = tf.cond(is_training,
+                        lambda: tf.random_normal(shape=tf.shape(fv), mean=0.0, stddev=0.01, dtype=tf.float32),
+                        lambda:  tf.zeros(shape=tf.shape(fv)))
+        #noise = tf.random_normal(shape=tf.shape(fv), mean=0.0, stddev=0.01, dtype=tf.float32)
+        fv = fv + noise
+
+    grid_fisher = tf.reshape(fv,[batch_size,-1,res,res,res])
+    grid_fisher = tf.transpose(grid_fisher, [0, 2, 3, 4, 1])
+
+    # Inception
+    layer = 1
+    net = inception_module(grid_fisher, n_filters=64,kernel_sizes=[3,5], is_training=is_training, bn_decay=bn_decay, scope='inception'+str(layer))
+    layer = layer + 1
+    net = inception_module(net, n_filters=128,kernel_sizes=[3, 5], is_training=is_training, bn_decay=bn_decay, scope='inception'+str(layer))
+    layer = layer + 1
+    net = inception_module(net, n_filters=256,kernel_sizes=[3, 5], is_training=is_training, bn_decay=bn_decay, scope='inception'+str(layer))
+    layer = layer + 1
+    net = tf_util.max_pool3d(net, [2, 2, 2], scope='maxpool'+str(layer), stride=[2, 2, 2], padding='SAME')
+    layer = layer + 1
+    net = inception_module(net, n_filters=256,kernel_sizes=[3,5], is_training=is_training, bn_decay=bn_decay, scope='inception'+str(layer))
+    layer = layer + 1
+    net = inception_module(net, n_filters=512,kernel_sizes=[3,5], is_training=is_training, bn_decay=bn_decay, scope='inception'+str(layer))
+    layer = layer + 1
+    net = tf_util.max_pool3d(net, [2, 2, 2], scope='maxpool'+str(layer), stride=[2, 2, 2], padding='SAME')
+
+    net = tf.reshape(net,[batch_size, -1])
+
+    #Classifier
+    net = tf_util.fully_connected(net, 1024, bn=True, is_training=is_training,
+                                  scope='fc1', bn_decay=bn_decay, weigth_decay=weigth_decay)
+    net = tf_util.dropout(net, keep_prob=0.7, is_training=is_training,
+                          scope='dp1')
+    net = tf_util.fully_connected(net, 256, bn=True, is_training=is_training,
+                                  scope='fc2', bn_decay=bn_decay, weigth_decay=weigth_decay)
+    net = tf_util.dropout(net, keep_prob=0.7, is_training=is_training,
+                          scope='dp2')
+    net = tf_util.fully_connected(net, 128, bn=True, is_training=is_training,
+                                  scope='fc3', bn_decay=bn_decay, weigth_decay=weigth_decay)
+    net = tf_util.dropout(net, keep_prob=0.7, is_training=is_training,
+                          scope='dp3')
+    net = tf_util.fully_connected(net, num_classes, activation_fn=None, scope='fc4', is_training=is_training, weigth_decay=weigth_decay)
+
+    return net, fv
 
 def inception_module(input, n_filters=64, kernel_sizes=[3,5], is_training=None, bn_decay=None, scope='inception'):
     one_by_one =  tf_util.conv3d(input, n_filters, [1,1,1], scope= scope + '_conv1',
